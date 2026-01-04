@@ -340,70 +340,70 @@ struct mainFunctions
 
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
-		logger::trace("GetEquipState: Start");
+		logs::trace("GetEquipState: Start");
 		std::uint32_t a_result = _GetEquipState(a_this);
-		logger::trace("GetEquipState: Original result = {}", a_result);
+		logs::trace("GetEquipState: Original result = {}", a_result);
 		
 		if (!a_this) {
-			logger::warn("GetEquipState: a_this is null");
+			logs::warn("GetEquipState: a_this is null");
 			return a_result;
 		}
-		logger::trace("GetEquipState: a_this valid");
+		logs::trace("GetEquipState: a_this valid");
 
 		if (!a_this->objDesc) {
-			logger::warn("GetEquipState: objDesc is null");
+			logs::warn("GetEquipState: objDesc is null");
 			return a_result;
 		}
-		logger::trace("GetEquipState: objDesc valid");
+		logs::trace("GetEquipState: objDesc valid");
 
 		if (a_result > 1) {  //2 -left 3-right 4-left/right
-			logger::trace("GetEquipState: a_result > 1, checking player ref");
+			logs::trace("GetEquipState: a_result > 1, checking player ref");
 			RE::NiPointer<RE::TESObjectREFR> refr;
 			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr && refr->IsPlayerRef())
 			{
-				logger::trace("GetEquipState: Player ref confirmed");
+				logs::trace("GetEquipState: Player ref confirmed");
 				auto eqObj = a_this->objDesc->object;
 				if (eqObj)
 				{
-					logger::trace("GetEquipState: eqObj valid");
+					logs::trace("GetEquipState: eqObj valid");
 					auto player = RE::PlayerCharacter::GetSingleton();
 					if (!player) {
-						logger::warn("GetEquipState: Player singleton is null");
+						logs::warn("GetEquipState: Player singleton is null");
 						return a_result;
 					}
-					logger::trace("GetEquipState: Player singleton valid");
+					logs::trace("GetEquipState: Player singleton valid");
 
 					int gripMode = mainFunctions::getCurrentGripMode(player);
-					logger::trace("GetEquipState: gripMode = {}", gripMode);
+					logs::trace("GetEquipState: gripMode = {}", gripMode);
 					
 					if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
-						logger::trace("GetEquipState: Returning 4 for 2H/melee staff grip");
+						logs::trace("GetEquipState: Returning 4 for 2H/melee staff grip");
 						return 4;
 					}
 
-					logger::trace("GetEquipState: Getting equipped objects");
+					logs::trace("GetEquipState: Getting equipped objects");
 					auto rHand = player->GetEquippedObject(false);
 					//auto rHandEntry = player->GetEquippedEntryData(false);
 					auto lHand = player->GetEquippedObject(true);
 					//auto lHandEntry = player->GetEquippedEntryData(true);
-					logger::trace("GetEquipState: rHand = {:X}, lHand = {:X}", (uintptr_t)rHand, (uintptr_t)lHand);
+					logs::trace("GetEquipState: rHand = {:X}, lHand = {:X}", (uintptr_t)rHand, (uintptr_t)lHand);
 
 					if (a_result == 4 && rHand == lHand) {// && rHandEntry == lHandEntry)
-						logger::trace("GetEquipState: Same weapon in both hands");
+						logs::trace("GetEquipState: Same weapon in both hands");
 						return 4;
 					}
 
 					if (a_result == 4 && gripMode != DEFAULTGRIPMODE && eqObj->IsWeapon()) {
-						logger::trace("GetEquipState: Checking if weapon is 2H");
+						logs::trace("GetEquipState: Checking if weapon is 2H");
 						if (isTwoHanded(eqObj->As<RE::TESObjectWEAP>())) {
-							logger::trace("GetEquipState: Returning 3 for 2H weapon in custom grip");
+							logs::trace("GetEquipState: Returning 3 for 2H weapon in custom grip");
 							return 3;
 						}
 					}
 				}
 			}
 		}
-		logger::trace("GetEquipState: Returning result = {}", a_result);
+		logs::trace("GetEquipState: Returning result = {}", a_result);
 		return a_result;
 	}
 	static inline REL::Relocation<decltype(GetEquipState)> _GetEquipState;
