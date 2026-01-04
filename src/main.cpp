@@ -345,15 +345,15 @@ struct mainFunctions
 	{
 		// Validate input before doing anything
 		if (!a_this) {
-			return 1;
+			return 0;
 		}
 
 		// Call original function with valid pointer
-		std::uint32_t a_result = 1;
+		std::uint32_t a_result = 0;
 		try {
 			a_result = _GetEquipState(a_this);
 		} catch (...) {
-			return 1;
+			return 0;
 		}
 		
 		// Only modify behavior for equipped items (result > 1) with valid data
@@ -375,9 +375,15 @@ struct mainFunctions
 		auto eqObj = a_this->objDesc->object;
 		int gripMode = mainFunctions::getCurrentGripMode(player);
 		
-		// Return "both hands" state for 2H grip modes
+		// For 2H grip modes, only return "both hands" if this item is actually in right hand
 		if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
-			return 4;
+			auto rHand = player->GetEquippedObject(false);
+			// Only show "both hands" icon for the weapon that's actually equipped in right hand
+			if (rHand && eqObj == rHand) {
+				return 4;
+			}
+			// For other items, return original state
+			return a_result;
 		}
 
 		// Handle special cases for custom grip modes
@@ -386,12 +392,12 @@ struct mainFunctions
 			auto lHand = player->GetEquippedObject(true);
 
 			// Same weapon in both hands
-			if (rHand && rHand == lHand) {
+			if (rHand && rHand == lHand && eqObj == rHand) {
 				return 4;
 			}
 
 			// 2H weapon in custom grip should show as right hand only
-			if (eqObj->IsWeapon() && isTwoHanded(eqObj->As<RE::TESObjectWEAP>())) {
+			if (eqObj->IsWeapon() && isTwoHanded(eqObj->As<RE::TESObjectWEAP>()) && eqObj == rHand) {
 				return 3;
 			}
 		}
