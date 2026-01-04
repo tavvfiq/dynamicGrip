@@ -77,6 +77,7 @@ struct mainFunctions
 {
 	static void Hook()
 	{
+		logs::info("DynamicGrip: Starting hook installation...");
 		//debug
 		//REL::Relocation<std::uintptr_t> SneakHandlerVtbl{ RE::VTABLE_SneakHandler[0] };
 		//_CanProcessSneak = SneakHandlerVtbl.write_vfunc(0x4, CanProcessSneak);
@@ -99,8 +100,10 @@ struct mainFunctions
 		REL::Relocation<std::uintptr_t> PlayerCharacterVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		_OnItemEquipped = PlayerCharacterVtbl.write_vfunc(0xb2, OnItemEquipped);
 
+		logs::info("DynamicGrip: Installing GetEquipState hook...");
 		REL::Relocation<std::uintptr_t> StandardItemDataVtbl{ RE::VTABLE_StandardItemData[0] };
 		_GetEquipState = StandardItemDataVtbl.write_vfunc(0x3, GetEquipState);
+		logs::info("DynamicGrip: GetEquipState hook installed");
 
 		if (bEnableNPC)
 		{
@@ -340,15 +343,17 @@ struct mainFunctions
 
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
-		logs::trace("GetEquipState: Start");
-		std::uint32_t a_result = _GetEquipState(a_this);
-		logs::trace("GetEquipState: Original result = {}", a_result);
+		logs::trace("GetEquipState: Start - a_this = {:X}", (uintptr_t)a_this);
 		
 		if (!a_this) {
-			logs::warn("GetEquipState: a_this is null");
-			return a_result;
+			logs::warn("GetEquipState: a_this is null, calling original");
+			return _GetEquipState(a_this);
 		}
 		logs::trace("GetEquipState: a_this valid");
+		
+		logs::trace("GetEquipState: Calling original function");
+		std::uint32_t a_result = _GetEquipState(a_this);
+		logs::trace("GetEquipState: Original result = {}", a_result);
 
 		if (!a_this->objDesc) {
 			logs::warn("GetEquipState: objDesc is null");
