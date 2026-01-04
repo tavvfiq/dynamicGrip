@@ -343,72 +343,59 @@ struct mainFunctions
 
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
-		logs::trace("GetEquipState: Start - a_this = {:X}", (uintptr_t)a_this);
-		
+		// Validate input before doing anything
 		if (!a_this) {
-			logs::warn("GetEquipState: a_this is null, calling original");
-			return _GetEquipState(a_this);
+			return 1;
 		}
-		logs::trace("GetEquipState: a_this valid");
-		
-		logs::trace("GetEquipState: Calling original function");
-		std::uint32_t a_result = _GetEquipState(a_this);
-		logs::trace("GetEquipState: Original result = {}", a_result);
 
-		if (!a_this->objDesc) {
-			logs::warn("GetEquipState: objDesc is null");
+		// Call original function with valid pointer
+		std::uint32_t a_result = 1;
+		try {
+			a_result = _GetEquipState(a_this);
+		} catch (...) {
+			return 1;
+		}
+		
+		// Only modify behavior for equipped items (result > 1) with valid data
+		if (a_result <= 1 || !a_this->objDesc || !a_this->objDesc->object) {
 			return a_result;
 		}
-		logs::trace("GetEquipState: objDesc valid");
 
-		if (a_result > 1) {  //2 -left 3-right 4-left/right
-			logs::trace("GetEquipState: a_result > 1, checking player ref");
-			RE::NiPointer<RE::TESObjectREFR> refr;
-			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr && refr->IsPlayerRef())
-			{
-				logs::trace("GetEquipState: Player ref confirmed");
-				auto eqObj = a_this->objDesc->object;
-				if (eqObj)
-				{
-					logs::trace("GetEquipState: eqObj valid");
-					auto player = RE::PlayerCharacter::GetSingleton();
-					if (!player) {
-						logs::warn("GetEquipState: Player singleton is null");
-						return a_result;
-					}
-					logs::trace("GetEquipState: Player singleton valid");
+		// Verify this is for the player
+		RE::NiPointer<RE::TESObjectREFR> refr;
+		if (!RE::LookupReferenceByHandle(a_this->owner, refr) || !refr || !refr->IsPlayerRef()) {
+			return a_result;
+		}
 
-					int gripMode = mainFunctions::getCurrentGripMode(player);
-					logs::trace("GetEquipState: gripMode = {}", gripMode);
-					
-					if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
-						logs::trace("GetEquipState: Returning 4 for 2H/melee staff grip");
-						return 4;
-					}
+		auto player = RE::PlayerCharacter::GetSingleton();
+		if (!player) {
+			return a_result;
+		}
 
-					logs::trace("GetEquipState: Getting equipped objects");
-					auto rHand = player->GetEquippedObject(false);
-					//auto rHandEntry = player->GetEquippedEntryData(false);
-					auto lHand = player->GetEquippedObject(true);
-					//auto lHandEntry = player->GetEquippedEntryData(true);
-					logs::trace("GetEquipState: rHand = {:X}, lHand = {:X}", (uintptr_t)rHand, (uintptr_t)lHand);
+		auto eqObj = a_this->objDesc->object;
+		int gripMode = mainFunctions::getCurrentGripMode(player);
+		
+		// Return "both hands" state for 2H grip modes
+		if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
+			return 4;
+		}
 
-					if (a_result == 4 && rHand == lHand) {// && rHandEntry == lHandEntry)
-						logs::trace("GetEquipState: Same weapon in both hands");
-						return 4;
-					}
+		// Handle special cases for custom grip modes
+		if (a_result == 4 && gripMode != DEFAULTGRIPMODE) {
+			auto rHand = player->GetEquippedObject(false);
+			auto lHand = player->GetEquippedObject(true);
 
-					if (a_result == 4 && gripMode != DEFAULTGRIPMODE && eqObj->IsWeapon()) {
-						logs::trace("GetEquipState: Checking if weapon is 2H");
-						if (isTwoHanded(eqObj->As<RE::TESObjectWEAP>())) {
-							logs::trace("GetEquipState: Returning 3 for 2H weapon in custom grip");
-							return 3;
-						}
-					}
-				}
+			// Same weapon in both hands
+			if (rHand && rHand == lHand) {
+				return 4;
+			}
+
+			// 2H weapon in custom grip should show as right hand only
+			if (eqObj->IsWeapon() && isTwoHanded(eqObj->As<RE::TESObjectWEAP>())) {
+				return 3;
 			}
 		}
-		logs::trace("GetEquipState: Returning result = {}", a_result);
+
 		return a_result;
 	}
 	static inline REL::Relocation<decltype(GetEquipState)> _GetEquipState;
