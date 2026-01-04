@@ -341,9 +341,14 @@ struct mainFunctions
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
 		std::uint32_t a_result = _GetEquipState(a_this);
+		
+		if (!a_this || !a_this->objDesc) {
+			return a_result;
+		}
+
 		if (a_result > 1) {  //2 -left 3-right 4-left/right
 			RE::NiPointer<RE::TESObjectREFR> refr;
-			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr->IsPlayerRef())
+			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr && refr->IsPlayerRef())
 			{
 				auto eqObj = a_this->objDesc->object;
 				if (eqObj)
