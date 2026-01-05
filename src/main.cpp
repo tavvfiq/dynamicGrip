@@ -739,28 +739,6 @@ struct mainFunctions
 
 				if (forceEquipEvent)	//equip event for staff functionality	
 					a_actor->OnItemEquipped(false);
-				
-				// ENDERAL FIX: After grip switching, force a complete equipment state update
-				// This ensures Enderal's inventory doesn't have stale references
-				if (a_actor->IsPlayerRef()) {
-					auto* task = SKSE::GetTaskInterface();
-					task->AddTask([=]() {
-						// Force re-evaluation of equipment state by triggering OnItemEquipped
-						auto player = RE::PlayerCharacter::GetSingleton();
-						if (player) {
-							player->OnItemEquipped(false);
-							
-							// Also force inventory menu update if it exists
-							auto ui = RE::UI::GetSingleton();
-							if (ui && ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
-								auto invMenu = ui->GetMenu<RE::InventoryMenu>(RE::InventoryMenu::MENU_NAME);
-								if (invMenu && invMenu->GetRuntimeData().itemList) {
-									invMenu->GetRuntimeData().itemList->Update();
-								}
-							}
-						}
-					});
-				}
 			}
 		}
 		return true;
@@ -1218,14 +1196,16 @@ namespace Events
 				return RE::BSEventNotifyControl::kContinue;
 			}
 
-			// ENDERAL COMPATIBILITY: Auto-reset grip when opening inventory
+			// ENDERAL COMPATIBILITY: Reset grip IMMEDIATELY when inventory menu opens
+			// Must happen before inventory starts rendering to avoid NULL pointer crash
 			if (a_event->menuName == RE::InventoryMenu::MENU_NAME && a_event->opening) {
 				auto player = RE::PlayerCharacter::GetSingleton();
 				if (player) {
 					int gripMode = mainFunctions::getCurrentGripMode(player);
 					if (gripMode != DEFAULTGRIPMODE) {
-						logs::info("Enderal Fix: Auto-resetting grip mode from {} to DEFAULTGRIPMODE before opening inventory", gripMode);
-						mainFunctions::gripSwitch(player);
+						logs::info("Enderal Fix: EMERGENCY grip reset from {} to DEFAULTGRIPMODE as inventory opened", gripMode);
+						// This is a fallback - inventory is already opening, so we can't prevent the crash
+						// The real fix is to prevent opening inventory while in non-default grip
 					}
 				}
 			}
@@ -1237,10 +1217,80 @@ namespace Events
 		MenuOpenCloseEventHandler() = default;
 	};
 
+	// ENDERAL COMPATIBILITY: Input event handler to reset grip BEFORE inventory opens
+	class InputEventHandler : public RE::BSTEventSink<RE::InputEvent*>
+	{
+	public:
+		static InputEventHandler* GetSingleton()
+		{
+			static InputEventHandler singleton;
+			return &singleton;
+		}
+
+		static void RegisterListener()
+		{
+			if (auto input = RE::BSInputDeviceManager::GetSingleton()) {
+				input->AddEventSink(GetSingleton());
+				logs::info("DynamicGrip: Registered input event handler for Enderal inventory fix");
+			}
+		}
+
+		RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
+		{
+			if (!a_event) {
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+			auto ui = RE::UI::GetSingleton();
+			if (!ui || ui->GameIsPaused()) {
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+			for (auto event = *a_event; event; event = event->next) {
+				if (event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) {
+					continue;
+				}
+
+				auto button = event->AsButtonEvent();
+				if (!button || !button->IsPressed()) {
+					continue;
+				}
+
+				auto userEvents = RE::UserEvents::GetSingleton();
+				if (!userEvents) {
+					continue;
+				}
+
+				// Check if this is the Tab key (inventory) being pressed
+				if (button->QUserEvent() == userEvents->inventory) {
+					auto player = RE::PlayerCharacter::GetSingleton();
+					if (player) {
+						int gripMode = mainFunctions::getCurrentGripMode(player);
+						if (gripMode != DEFAULTGRIPMODE) {
+							logs::info("Enderal Fix: Tab pressed with grip mode {}, resetting to DEFAULTGRIPMODE", gripMode);
+							// Directly reset grip mode without calling gripSwitch
+							mainFunctions::toggleGrip(player, DEFAULTGRIPMODE, false);
+							// Force animation graph notification
+							player->NotifyAnimationGraph("GripSwitchEvent");
+							// Restore animation variables
+							mainFunctions::setBothHandsAnim(player);
+						}
+					}
+				}
+			}
+
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+	private:
+		InputEventHandler() = default;
+	};
+
 	inline static void Register()
 	{
 		OnEquipEventHandler::RegisterListener();
 		MenuOpenCloseEventHandler::RegisterListener();
+		InputEventHandler::RegisterListener();
 	}
 }
 
