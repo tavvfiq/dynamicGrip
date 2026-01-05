@@ -1197,9 +1197,50 @@ namespace Events
 		OnEquipEventHandler() = default;
 	};
 
+	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
+	{
+	public:
+		static MenuOpenCloseEventHandler* GetSingleton()
+		{
+			static MenuOpenCloseEventHandler singleton;
+			return &singleton;
+		}
+
+		static void RegisterListener()
+		{
+			RE::UI::GetSingleton()->AddEventSink(MenuOpenCloseEventHandler::GetSingleton());
+			logs::info("DynamicGrip: Registered menu open/close event handler");
+		}
+
+		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
+		{
+			if (!a_event) {
+				return RE::BSEventNotifyControl::kContinue;
+			}
+
+			// ENDERAL COMPATIBILITY: Auto-reset grip when opening inventory
+			if (a_event->menuName == RE::InventoryMenu::MENU_NAME && a_event->opening) {
+				auto player = RE::PlayerCharacter::GetSingleton();
+				if (player) {
+					int gripMode = mainFunctions::getCurrentGripMode(player);
+					if (gripMode != DEFAULTGRIPMODE) {
+						logs::info("Enderal Fix: Auto-resetting grip mode from {} to DEFAULTGRIPMODE before opening inventory", gripMode);
+						mainFunctions::gripSwitch(player);
+					}
+				}
+			}
+
+			return RE::BSEventNotifyControl::kContinue;
+		}
+
+	private:
+		MenuOpenCloseEventHandler() = default;
+	};
+
 	inline static void Register()
 	{
 		OnEquipEventHandler::RegisterListener();
+		MenuOpenCloseEventHandler::RegisterListener();
 	}
 }
 
@@ -1461,27 +1502,6 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
-	struct InventoryMenuOpen
-	{
-		static void thunk(RE::IMenu* a_menu)
-		{
-			// ENDERAL COMPATIBILITY: Auto-reset grip mode when opening inventory
-			// Enderal's inventory cannot handle grip-switched weapon states
-			auto player = RE::PlayerCharacter::GetSingleton();
-			if (player) {
-				int gripMode = mainFunctions::getCurrentGripMode(player);
-				if (gripMode != DEFAULTGRIPMODE) {
-					logs::info("Enderal Fix: Auto-resetting grip mode from {} to DEFAULTGRIPMODE before opening inventory", gripMode);
-					mainFunctions::gripSwitch(player);
-				}
-			}
-			
-			return func(a_menu);
-		}
-		static inline REL::Relocation<decltype(thunk)> func;
-	};
-	static inline REL::Relocation<decltype(InventoryMenuOpen::thunk)> _InventoryMenuOpen;
-
 	static void install()
 	{
 		//theres a bazillion weapon type verfications that prevent 2h weapons from being wielded as a 1hander
@@ -1553,12 +1573,6 @@ namespace Hooks
 			REL::Relocation<std::uintptr_t> targetK{ RELOCATION_ID(33631, 34409) };
 			stl::write_thunk_call<sub_1405BBD40>(targetK.address() + REL::Relocate(0x119, 0x138));
 		}
-
-		// ENDERAL COMPATIBILITY: Hook inventory menu PostDisplay to auto-reset grip mode
-		// This prevents crashes in Enderal's inventory display code
-		REL::Relocation<std::uintptr_t> InventoryMenuVtbl{ RE::VTABLE_InventoryMenu[0] };
-		Hooks::_InventoryMenuOpen = InventoryMenuVtbl.write_vfunc(0x6, Hooks::InventoryMenuOpen::thunk);
-		logs::info("DynamicGrip: Installed Enderal inventory compatibility hook");
 
 	}
 }
