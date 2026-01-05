@@ -1267,13 +1267,36 @@ namespace Events
 					if (player) {
 						int gripMode = mainFunctions::getCurrentGripMode(player);
 						if (gripMode != DEFAULTGRIPMODE) {
-							logs::info("Enderal Fix: Tab pressed with grip mode {}, resetting to DEFAULTGRIPMODE", gripMode);
-							// Directly reset grip mode without calling gripSwitch
-							mainFunctions::toggleGrip(player, DEFAULTGRIPMODE, false);
-							// Force animation graph notification
-							player->NotifyAnimationGraph("GripSwitchEvent");
-							// Restore animation variables
-							mainFunctions::setBothHandsAnim(player);
+							logs::info("Enderal Fix: Blocking inventory and auto-switching grip from {} to default", gripMode);
+							
+							// BLOCK this inventory open attempt
+							button->heldDownSecs = 0.0f;
+							
+							// Queue grip switch to happen immediately
+							auto* task = SKSE::GetTaskInterface();
+							task->AddTask([player, gripMode]() {
+								// Force grip switch back to default
+								if (player->AsActorState()->IsWeaponDrawn()) {
+									mainFunctions::gripSwitch(player);
+								} else {
+									// If weapons sheathed, just reset the mode
+									mainFunctions::toggleGrip(player, DEFAULTGRIPMODE, false);
+								}
+								
+								// After grip is reset, allow inventory to open on next frame
+								task->AddTask([]() {
+									// Simulate Tab press to open inventory
+									auto ui = RE::UI::GetSingleton();
+									if (ui && !ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
+										auto msgQueue = RE::UIMessageQueue::GetSingleton();
+										if (msgQueue) {
+											msgQueue->AddMessage(RE::InventoryMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
+										}
+									}
+								});
+							});
+							
+							return RE::BSEventNotifyControl::kStop;
 						}
 					}
 				}
