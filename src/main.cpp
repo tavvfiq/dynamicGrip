@@ -100,7 +100,7 @@ struct mainFunctions
 		REL::Relocation<std::uintptr_t> PlayerCharacterVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		_OnItemEquipped = PlayerCharacterVtbl.write_vfunc(0xb2, OnItemEquipped);
 
-		logs::info("DynamicGrip: Installing GetEquipState hook (passthrough mode for Enderal compatibility)...");
+		logs::info("DynamicGrip: Installing GetEquipState hook...");
 		REL::Relocation<std::uintptr_t> StandardItemDataVtbl{ RE::VTABLE_StandardItemData[0] };
 		_GetEquipState = StandardItemDataVtbl.write_vfunc(0x3, GetEquipState);
 		logs::info("DynamicGrip: GetEquipState hook installed");
@@ -771,16 +771,26 @@ struct mainFunctions
 				if (forceEquipEvent)	//equip event for staff functionality	
 					a_actor->OnItemEquipped(false);
 				
-				// ENDERAL FIX: Force refresh inventory menu if it's open
-				// This prevents stale data from causing crashes
+				// ENDERAL FIX: After grip switching, force a complete equipment state update
+				// This ensures Enderal's inventory doesn't have stale references
 				if (a_actor->IsPlayerRef()) {
-					auto ui = RE::UI::GetSingleton();
-					if (ui && ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
-						auto invMenu = ui->GetMenu<RE::InventoryMenu>(RE::InventoryMenu::MENU_NAME);
-						if (invMenu && invMenu->GetRuntimeData().itemList) {
-							invMenu->GetRuntimeData().itemList->Update();
+					auto* task = SKSE::GetTaskInterface();
+					task->AddTask([=]() {
+						// Force re-evaluation of equipment state by triggering OnItemEquipped
+						auto player = RE::PlayerCharacter::GetSingleton();
+						if (player) {
+							player->OnItemEquipped(false);
+							
+							// Also force inventory menu update if it exists
+							auto ui = RE::UI::GetSingleton();
+							if (ui && ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
+								auto invMenu = ui->GetMenu<RE::InventoryMenu>(RE::InventoryMenu::MENU_NAME);
+								if (invMenu && invMenu->GetRuntimeData().itemList) {
+									invMenu->GetRuntimeData().itemList->Update();
+								}
+							}
 						}
-					}
+					});
 				}
 			}
 		}
@@ -1560,6 +1570,24 @@ namespace Hooks
 SKSEPluginLoad(const SKSE::LoadInterface* a_skse)
 {
 	SKSE::Init(a_skse);
+	
+	// Initialize logging
+	auto path = logs::log_directory();
+	if (!path) {
+		return false;
+	}
+	
+	*path /= "dynamicGrip.log";
+	auto sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(path->string(), true);
+	auto log = std::make_shared<spdlog::logger>("global log", std::move(sink));
+	
+	log->set_level(spdlog::level::info);
+	log->flush_on(spdlog::level::info);
+	
+	spdlog::set_default_logger(std::move(log));
+	spdlog::set_pattern("[%H:%M:%S] [%l] %v");
+	
+	logs::info("DynamicGrip v{}", SKSE::PluginDeclaration::GetSingleton()->GetVersion().string());
 
 	loadIni();
 	mainFunctions::Hook();
