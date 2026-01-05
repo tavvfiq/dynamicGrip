@@ -100,7 +100,7 @@ struct mainFunctions
 		REL::Relocation<std::uintptr_t> PlayerCharacterVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		_OnItemEquipped = PlayerCharacterVtbl.write_vfunc(0xb2, OnItemEquipped);
 
-		logs::info("DynamicGrip: Installing GetEquipState hook...");
+		logs::info("DynamicGrip: Installing GetEquipState hook (passthrough mode for Enderal compatibility)...");
 		REL::Relocation<std::uintptr_t> StandardItemDataVtbl{ RE::VTABLE_StandardItemData[0] };
 		_GetEquipState = StandardItemDataVtbl.write_vfunc(0x3, GetEquipState);
 		logs::info("DynamicGrip: GetEquipState hook installed");
@@ -348,6 +348,12 @@ struct mainFunctions
 			return 0;
 		}
 
+		// CRITICAL: If we're in the middle of modifying weapon states, return safe value
+		// This prevents Enderal's inventory from querying weapons in an inconsistent state
+		if (isSwitching) {
+			return 0; // Return unequipped to prevent inventory from crashing
+		}
+
 		// Call original function with valid pointer
 		std::uint32_t a_result = 0;
 		try {
@@ -356,52 +362,30 @@ struct mainFunctions
 			return 0;
 		}
 		
-		// Only modify behavior for equipped items (result > 1) with valid data
-		if (a_result <= 1 || !a_this->objDesc || !a_this->objDesc->object) {
-			return a_result;
+		// ENDERAL FIX: When in 2H grip mode with a 1H weapon, the original function might
+		// return states that cause Enderal to look for weapons in the wrong slots
+		// We need to ensure the result is safe for Enderal's inventory system
+		if (a_result > 1 && a_this->objDesc && a_this->objDesc->object) {
+			RE::NiPointer<RE::TESObjectREFR> refr;
+			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr && refr->IsPlayerRef()) {
+				auto player = RE::PlayerCharacter::GetSingleton();
+				if (player) {
+					int gripMode = mainFunctions::getCurrentGripMode(player);
+					// In 2H grip mode, ensure we only return states for items actually equipped
+					if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
+						auto eqObj = a_this->objDesc->object;
+						auto rHand = player->GetEquippedObject(false);
+						auto lHand = player->GetEquippedObject(true);
+						
+						// Only return equipped state if this item is actually in a hand
+						if (eqObj != rHand && eqObj != lHand) {
+							return 0; // Not actually equipped, return unequipped
+						}
+					}
+				}
+			}
 		}
-
-		// Verify this is for the player
-		RE::NiPointer<RE::TESObjectREFR> refr;
-		if (!RE::LookupReferenceByHandle(a_this->owner, refr) || !refr || !refr->IsPlayerRef()) {
-			return a_result;
-		}
-
-		auto player = RE::PlayerCharacter::GetSingleton();
-		if (!player) {
-			return a_result;
-		}
-
-		auto eqObj = a_this->objDesc->object;
-		int gripMode = mainFunctions::getCurrentGripMode(player);
 		
-		// For 2H grip modes, only return "both hands" if this item is actually in right hand
-		if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
-			auto rHand = player->GetEquippedObject(false);
-			// Only show "both hands" icon for the weapon that's actually equipped in right hand
-			if (rHand && eqObj == rHand) {
-				return 4;
-			}
-			// For other items, return original state
-			return a_result;
-		}
-
-		// Handle special cases for custom grip modes
-		if (a_result == 4 && gripMode != DEFAULTGRIPMODE) {
-			auto rHand = player->GetEquippedObject(false);
-			auto lHand = player->GetEquippedObject(true);
-
-			// Same weapon in both hands
-			if (rHand && rHand == lHand && eqObj == rHand) {
-				return 4;
-			}
-
-			// 2H weapon in custom grip should show as right hand only
-			if (eqObj->IsWeapon() && isTwoHanded(eqObj->As<RE::TESObjectWEAP>()) && eqObj == rHand) {
-				return 3;
-			}
-		}
-
 		return a_result;
 	}
 	static inline REL::Relocation<decltype(GetEquipState)> _GetEquipState;
@@ -472,14 +456,19 @@ struct mainFunctions
 
 			if (rightHand && rightHand->IsWeapon()) {
 				originalRightWeapon = rightHand->As<RE::TESObjectWEAP>()->GetWeaponType();
-				if (mainFunctions::isTwoHanded(rightHand->As<RE::TESObjectWEAP>()))
+				if (mainFunctions::isTwoHanded(rightHand->As<RE::TESObjectWEAP>())) {
+					// CRITICAL: Set flag while modifying weapon state
+					isSwitching = true;
 					rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kOneHandSword;
+				}
 			}
 
 			if (leftHand && leftHand->IsWeapon() && rightHand && leftHand->GetFormID() != rightHand->GetFormID()) {
 				originalLeftWeapon = leftHand->As<RE::TESObjectWEAP>()->GetWeaponType();
-				if (mainFunctions::isTwoHanded(leftHand->As<RE::TESObjectWEAP>()))
+				if (mainFunctions::isTwoHanded(leftHand->As<RE::TESObjectWEAP>())) {
+					isSwitching = true;
 					leftHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kOneHandSword;
+				}
 			}
 
 			_OnItemEquipped(a_this, anim);
@@ -491,6 +480,9 @@ struct mainFunctions
 			if (leftHand && leftHand->IsWeapon() && rightHand && leftHand->GetFormID() != rightHand->GetFormID()) {
 				leftHand->As<RE::TESObjectWEAP>()->weaponData.animationType = originalLeftWeapon;
 			}
+			
+			// CRITICAL: Clear flag after weapon states restored
+			isSwitching = false;
 			return;
 
 
@@ -778,6 +770,18 @@ struct mainFunctions
 
 				if (forceEquipEvent)	//equip event for staff functionality	
 					a_actor->OnItemEquipped(false);
+				
+				// ENDERAL FIX: Force refresh inventory menu if it's open
+				// This prevents stale data from causing crashes
+				if (a_actor->IsPlayerRef()) {
+					auto ui = RE::UI::GetSingleton();
+					if (ui && ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
+						auto invMenu = ui->GetMenu<RE::InventoryMenu>(RE::InventoryMenu::MENU_NAME);
+						if (invMenu && invMenu->GetRuntimeData().itemList) {
+							invMenu->GetRuntimeData().itemList->Update();
+						}
+					}
+				}
 			}
 		}
 		return true;
@@ -969,8 +973,14 @@ struct mainFunctions
 
 	static void unequipSlotNOW(RE::Actor* a_actor, RE::BGSEquipSlot* slot)
 	{
-		auto* form = RE::TESForm::LookupByID<RE::TESForm>(0x00020163);  //dummydagger
+		auto* form = RE::TESForm::LookupByID<RE::TESForm>(0x00020163);  //dummydagger from Skyrim.esm
 		if (!form) {
+			// FALLBACK: If dummy dagger doesn't exist (Enderal?), try alternative method
+			auto* equip_manager = RE::ActorEquipManager::GetSingleton();
+			auto currentItem = a_actor->GetEquippedObject(slot == leftHandSlot);
+			if (currentItem) {
+				equip_manager->UnequipObject(a_actor, currentItem->As<RE::TESBoundObject>(), nullptr, 1, slot, false, true, false);
+			}
 			return;
 		}
 		auto* proxy = form->As<RE::TESObjectWEAP>();
