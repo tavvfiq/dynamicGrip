@@ -77,7 +77,6 @@ struct mainFunctions
 {
 	static void Hook()
 	{
-		logs::info("DynamicGrip: Starting hook installation...");
 		//debug
 		//REL::Relocation<std::uintptr_t> SneakHandlerVtbl{ RE::VTABLE_SneakHandler[0] };
 		//_CanProcessSneak = SneakHandlerVtbl.write_vfunc(0x4, CanProcessSneak);
@@ -100,10 +99,8 @@ struct mainFunctions
 		REL::Relocation<std::uintptr_t> PlayerCharacterVtbl{ RE::VTABLE_PlayerCharacter[0] };
 		_OnItemEquipped = PlayerCharacterVtbl.write_vfunc(0xb2, OnItemEquipped);
 
-		logs::info("DynamicGrip: Installing GetEquipState hook...");
 		REL::Relocation<std::uintptr_t> StandardItemDataVtbl{ RE::VTABLE_StandardItemData[0] };
 		_GetEquipState = StandardItemDataVtbl.write_vfunc(0x3, GetEquipState);
-		logs::info("DynamicGrip: GetEquipState hook installed");
 
 		if (bEnableNPC)
 		{
@@ -343,19 +340,34 @@ struct mainFunctions
 
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
-		// ENDERAL COMPATIBILITY FIX: Disable all custom logic
-		// Enderal's inventory system cannot handle grip-switched weapon states
-		// Any grip mode change (1H→2H or 2H→1H) causes NULL pointer crashes
-		// Simply return the original result without modification
-		if (!a_this) {
-			return 0;
-		}
+		std::uint32_t a_result = _GetEquipState(a_this);
+		if (a_result > 1) {  //2 -left 3-right 4-left/right
+			RE::NiPointer<RE::TESObjectREFR> refr;
+			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr->IsPlayerRef())
+			{
+				auto eqObj = a_this->objDesc->object;
+				if (eqObj)
+				{
 
-		try {
-			return _GetEquipState(a_this);
-		} catch (...) {
-			return 0;
+					int gripMode = mainFunctions::getCurrentGripMode(RE::PlayerCharacter::GetSingleton());
+					if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE)
+						return 4;
+
+					auto player = RE::PlayerCharacter::GetSingleton();
+					auto rHand = player->GetEquippedObject(false);
+					//auto rHandEntry = player->GetEquippedEntryData(false);
+					auto lHand = player->GetEquippedObject(true);
+					//auto lHandEntry = player->GetEquippedEntryData(true);
+
+					if (a_result == 4 && rHand == lHand)// && rHandEntry == lHandEntry)
+						return 4;
+
+					if (a_result == 4 && gripMode != DEFAULTGRIPMODE && eqObj->IsWeapon() && isTwoHanded(eqObj->As<RE::TESObjectWEAP>()))
+						return 3;
+				}
+			}
 		}
+		return a_result;
 	}
 	static inline REL::Relocation<decltype(GetEquipState)> _GetEquipState;
 
@@ -423,25 +435,25 @@ struct mainFunctions
 			//set accurate values for iRightHandEquipped_DG/iLeftHandEquipped_DG Graphvars which hold the current drawn weapons type
 			mainFunctions::setBothHandsAnim(a_this, "Equipped_DG");
 
+			// COMMENTED OUT: animationType modification causes inventory crashes
+			// OAR will handle animation selection based on iDynamicGripMode graph variable
+			/*
 			if (rightHand && rightHand->IsWeapon()) {
 				originalRightWeapon = rightHand->As<RE::TESObjectWEAP>()->GetWeaponType();
-				if (mainFunctions::isTwoHanded(rightHand->As<RE::TESObjectWEAP>())) {
-					// CRITICAL: Set flag while modifying weapon state
-					isSwitching = true;
+				if (mainFunctions::isTwoHanded(rightHand->As<RE::TESObjectWEAP>()))
 					rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kOneHandSword;
-				}
 			}
 
 			if (leftHand && leftHand->IsWeapon() && rightHand && leftHand->GetFormID() != rightHand->GetFormID()) {
 				originalLeftWeapon = leftHand->As<RE::TESObjectWEAP>()->GetWeaponType();
-				if (mainFunctions::isTwoHanded(leftHand->As<RE::TESObjectWEAP>())) {
-					isSwitching = true;
+				if (mainFunctions::isTwoHanded(leftHand->As<RE::TESObjectWEAP>()))
 					leftHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kOneHandSword;
-				}
 			}
+			*/
 
 			_OnItemEquipped(a_this, anim);
 
+			/*
 			if (rightHand && rightHand->IsWeapon()) {
 				rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = originalRightWeapon;
 			}
@@ -449,9 +461,7 @@ struct mainFunctions
 			if (leftHand && leftHand->IsWeapon() && rightHand && leftHand->GetFormID() != rightHand->GetFormID()) {
 				leftHand->As<RE::TESObjectWEAP>()->weaponData.animationType = originalLeftWeapon;
 			}
-			
-			// CRITICAL: Clear flag after weapon states restored
-			isSwitching = false;
+			*/
 			return;
 
 
@@ -460,15 +470,17 @@ struct mainFunctions
 		case MELEESTAFFGRIPMODE_DW:
 
 			if (rightHand && rightHand->IsWeapon() && rightHand->As<RE::TESObjectWEAP>()->IsStaff()) {
-
-				rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kTwoHandAxe;
+				// COMMENTED OUT: animationType modification causes inventory crashes
+				// OAR will handle animation selection based on iDynamicGripMode graph variable
+				//rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kTwoHandAxe;
 				
+				// Keep damage/speed modifications for melee staff functionality
 				rightHand->As<RE::TESObjectWEAP>()->attackDamage = fMeleeStaffDamage;
 				rightHand->As<RE::TESObjectWEAP>()->criticalData.damage = 7;
 				rightHand->As<RE::TESObjectWEAP>()->weaponData.reach = 1.3f;
 				rightHand->As<RE::TESObjectWEAP>()->weaponData.speed = fMeleeStaffSpeed;
 				_OnItemEquipped(a_this, anim);
-				rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kStaff;
+				//rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kStaff;
 
 				return;
 			}
@@ -609,6 +621,8 @@ struct mainFunctions
 		return 0;
 	}
 
+	// COMMENTED OUT: No longer needed with OAR - graph variables set directly
+	/*
 	static void changeEquippedRightWeaponAnimVar(RE::Actor* a_actor, RE::TESObjectWEAP* a_rightWeapon, RE::WEAPON_TYPE a_weaponType)
 	{
 		originalRightWeapon = a_rightWeapon->GetWeaponType();
@@ -618,6 +632,7 @@ struct mainFunctions
 
 		a_rightWeapon->weaponData.animationType = originalRightWeapon;
 	}
+	*/
 
 	static bool gripSwitch(RE::Actor* a_actor)
 	{
@@ -654,7 +669,8 @@ struct mainFunctions
 						//dummy anim var for unequip animation
 						mainFunctions::setBothHandsAnim(a_actor, "Equipped_DG");
 
-						changeEquippedRightWeaponAnimVar(a_actor, rightWeapon, RE::WEAPON_TYPE::kTwoHandSword);
+						// COMMENTED OUT: OAR handles animation selection via iDynamicGripMode
+						//changeEquippedRightWeaponAnimVar(a_actor, rightWeapon, RE::WEAPON_TYPE::kTwoHandSword);
 						break;
 					}
 					if (isTwoHanded(rightWeapon))
@@ -672,7 +688,8 @@ struct mainFunctions
 
 						//set right-hand animvar as 1h
 						if (!previouLeftWeapon) {
-							changeEquippedRightWeaponAnimVar(a_actor, rightWeapon, RE::WEAPON_TYPE::kOneHandSword);
+							// COMMENTED OUT: OAR handles animation selection via iDynamicGripMode
+							//changeEquippedRightWeaponAnimVar(a_actor, rightWeapon, RE::WEAPON_TYPE::kOneHandSword);
 							/*
 							originalRightWeapon = rightHand->As<RE::TESObjectWEAP>()->GetWeaponType();
 							//rightHand->As<RE::TESObjectWEAP>()->weaponData.animationType = RE::WEAPON_TYPE::kOneHandSword;
@@ -789,10 +806,7 @@ struct mainFunctions
 
 	static int getCurrentGripMode(RE::Actor* a_actor)
 	{
-		if (!a_actor)
-			return DEFAULTGRIPMODE;
-		
-		int a_result = DEFAULTGRIPMODE;
+		int a_result;
 		a_actor->GetGraphVariableInt("iDynamicGripMode", a_result);
 		return a_result;
 	}
@@ -930,14 +944,8 @@ struct mainFunctions
 
 	static void unequipSlotNOW(RE::Actor* a_actor, RE::BGSEquipSlot* slot)
 	{
-		auto* form = RE::TESForm::LookupByID<RE::TESForm>(0x00020163);  //dummydagger from Skyrim.esm
+		auto* form = RE::TESForm::LookupByID<RE::TESForm>(0x00020163);  //dummydagger
 		if (!form) {
-			// FALLBACK: If dummy dagger doesn't exist (Enderal?), try alternative method
-			auto* equip_manager = RE::ActorEquipManager::GetSingleton();
-			auto currentItem = a_actor->GetEquippedObject(slot == leftHandSlot);
-			if (currentItem) {
-				equip_manager->UnequipObject(a_actor, currentItem->As<RE::TESBoundObject>(), nullptr, 1, slot, false, true, false);
-			}
 			return;
 		}
 		auto* proxy = form->As<RE::TESObjectWEAP>();
@@ -1175,145 +1183,9 @@ namespace Events
 		OnEquipEventHandler() = default;
 	};
 
-	class MenuOpenCloseEventHandler : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
-	{
-	public:
-		static MenuOpenCloseEventHandler* GetSingleton()
-		{
-			static MenuOpenCloseEventHandler singleton;
-			return &singleton;
-		}
-
-		static void RegisterListener()
-		{
-			RE::UI::GetSingleton()->AddEventSink(MenuOpenCloseEventHandler::GetSingleton());
-			logs::info("DynamicGrip: Registered menu open/close event handler");
-		}
-
-		RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override
-		{
-			if (!a_event) {
-				return RE::BSEventNotifyControl::kContinue;
-			}
-
-			// ENDERAL COMPATIBILITY: Reset grip IMMEDIATELY when inventory menu opens
-			// Must happen before inventory starts rendering to avoid NULL pointer crash
-			if (a_event->menuName == RE::InventoryMenu::MENU_NAME && a_event->opening) {
-				auto player = RE::PlayerCharacter::GetSingleton();
-				if (player) {
-					int gripMode = mainFunctions::getCurrentGripMode(player);
-					if (gripMode != DEFAULTGRIPMODE) {
-						logs::info("Enderal Fix: EMERGENCY grip reset from {} to DEFAULTGRIPMODE as inventory opened", gripMode);
-						// This is a fallback - inventory is already opening, so we can't prevent the crash
-						// The real fix is to prevent opening inventory while in non-default grip
-					}
-				}
-			}
-
-			return RE::BSEventNotifyControl::kContinue;
-		}
-
-	private:
-		MenuOpenCloseEventHandler() = default;
-	};
-
-	// ENDERAL COMPATIBILITY: Input event handler to reset grip BEFORE inventory opens
-	class InputEventHandler : public RE::BSTEventSink<RE::InputEvent*>
-	{
-	public:
-		static InputEventHandler* GetSingleton()
-		{
-			static InputEventHandler singleton;
-			return &singleton;
-		}
-
-		static void RegisterListener()
-		{
-			if (auto input = RE::BSInputDeviceManager::GetSingleton()) {
-				input->AddEventSink(GetSingleton());
-				logs::info("DynamicGrip: Registered input event handler for Enderal inventory fix");
-			}
-		}
-
-		RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override
-		{
-			if (!a_event) {
-				return RE::BSEventNotifyControl::kContinue;
-			}
-
-			auto ui = RE::UI::GetSingleton();
-			if (!ui || ui->GameIsPaused()) {
-				return RE::BSEventNotifyControl::kContinue;
-			}
-
-			for (auto event = *a_event; event; event = event->next) {
-				if (event->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) {
-					continue;
-				}
-
-				auto button = event->AsButtonEvent();
-				if (!button || !button->IsPressed()) {
-					continue;
-				}
-
-				auto userEvents = RE::UserEvents::GetSingleton();
-				if (!userEvents) {
-					continue;
-				}
-
-				// Check if this is the Tab key (inventory) being pressed
-				if (button->QUserEvent() == userEvents->inventory) {
-					auto player = RE::PlayerCharacter::GetSingleton();
-					if (player) {
-						int gripMode = mainFunctions::getCurrentGripMode(player);
-						if (gripMode != DEFAULTGRIPMODE) {
-							logs::info("Enderal Fix: Blocking inventory and auto-switching grip from {} to default", gripMode);
-							
-							// BLOCK this inventory open attempt
-							button->heldDownSecs = 0.0f;
-							
-							// Queue grip switch to happen immediately
-							auto* task = SKSE::GetTaskInterface();
-							task->AddTask([player, gripMode]() {
-								// Force grip switch back to default
-								if (player->AsActorState()->IsWeaponDrawn()) {
-									mainFunctions::gripSwitch(player);
-								} else {
-									// If weapons sheathed, just reset the mode
-									mainFunctions::toggleGrip(player, DEFAULTGRIPMODE, false);
-								}
-								
-								// After grip is reset, allow inventory to open on next frame
-								task->AddTask([]() {
-									// Simulate Tab press to open inventory
-									auto ui = RE::UI::GetSingleton();
-									if (ui && !ui->IsMenuOpen(RE::InventoryMenu::MENU_NAME)) {
-										auto msgQueue = RE::UIMessageQueue::GetSingleton();
-										if (msgQueue) {
-											msgQueue->AddMessage(RE::InventoryMenu::MENU_NAME, RE::UI_MESSAGE_TYPE::kShow, nullptr);
-										}
-									}
-								});
-							});
-							
-							return RE::BSEventNotifyControl::kStop;
-						}
-					}
-				}
-			}
-
-			return RE::BSEventNotifyControl::kContinue;
-		}
-
-	private:
-		InputEventHandler() = default;
-	};
-
 	inline static void Register()
 	{
 		OnEquipEventHandler::RegisterListener();
-		MenuOpenCloseEventHandler::RegisterListener();
-		InputEventHandler::RegisterListener();
 	}
 }
 
