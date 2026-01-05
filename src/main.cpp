@@ -343,50 +343,19 @@ struct mainFunctions
 
 	static std::uint32_t GetEquipState(RE::StandardItemData* a_this)
 	{
-		// Validate input before doing anything
+		// ENDERAL COMPATIBILITY FIX: Disable all custom logic
+		// Enderal's inventory system cannot handle grip-switched weapon states
+		// Any grip mode change (1H→2H or 2H→1H) causes NULL pointer crashes
+		// Simply return the original result without modification
 		if (!a_this) {
 			return 0;
 		}
 
-		// CRITICAL: If we're in the middle of modifying weapon states, return safe value
-		// This prevents Enderal's inventory from querying weapons in an inconsistent state
-		if (isSwitching) {
-			return 0; // Return unequipped to prevent inventory from crashing
-		}
-
-		// Call original function with valid pointer
-		std::uint32_t a_result = 0;
 		try {
-			a_result = _GetEquipState(a_this);
+			return _GetEquipState(a_this);
 		} catch (...) {
 			return 0;
 		}
-		
-		// ENDERAL FIX: When in 2H grip mode with a 1H weapon, the original function might
-		// return states that cause Enderal to look for weapons in the wrong slots
-		// We need to ensure the result is safe for Enderal's inventory system
-		if (a_result > 1 && a_this->objDesc && a_this->objDesc->object) {
-			RE::NiPointer<RE::TESObjectREFR> refr;
-			if (RE::LookupReferenceByHandle(a_this->owner, refr) && refr && refr->IsPlayerRef()) {
-				auto player = RE::PlayerCharacter::GetSingleton();
-				if (player) {
-					int gripMode = mainFunctions::getCurrentGripMode(player);
-					// In 2H grip mode, ensure we only return states for items actually equipped
-					if (gripMode == TWOHANDEDGRIPMODE || gripMode == MELEESTAFFGRIPMODE) {
-						auto eqObj = a_this->objDesc->object;
-						auto rHand = player->GetEquippedObject(false);
-						auto lHand = player->GetEquippedObject(true);
-						
-						// Only return equipped state if this item is actually in a hand
-						if (eqObj != rHand && eqObj != lHand) {
-							return 0; // Not actually equipped, return unequipped
-						}
-					}
-				}
-			}
-		}
-		
-		return a_result;
 	}
 	static inline REL::Relocation<decltype(GetEquipState)> _GetEquipState;
 
@@ -1492,6 +1461,27 @@ namespace Hooks
 		static inline REL::Relocation<decltype(thunk)> func;
 	};
 
+	struct InventoryMenuOpen
+	{
+		static void thunk(RE::IMenu* a_menu)
+		{
+			// ENDERAL COMPATIBILITY: Auto-reset grip mode when opening inventory
+			// Enderal's inventory cannot handle grip-switched weapon states
+			auto player = RE::PlayerCharacter::GetSingleton();
+			if (player) {
+				int gripMode = mainFunctions::getCurrentGripMode(player);
+				if (gripMode != DEFAULTGRIPMODE) {
+					logs::info("Enderal Fix: Auto-resetting grip mode from {} to DEFAULTGRIPMODE before opening inventory", gripMode);
+					mainFunctions::gripSwitch(player);
+				}
+			}
+			
+			return func(a_menu);
+		}
+		static inline REL::Relocation<decltype(thunk)> func;
+	};
+	static inline REL::Relocation<decltype(InventoryMenuOpen::thunk)> _InventoryMenuOpen;
+
 	static void install()
 	{
 		//theres a bazillion weapon type verfications that prevent 2h weapons from being wielded as a 1hander
@@ -1563,6 +1553,12 @@ namespace Hooks
 			REL::Relocation<std::uintptr_t> targetK{ RELOCATION_ID(33631, 34409) };
 			stl::write_thunk_call<sub_1405BBD40>(targetK.address() + REL::Relocate(0x119, 0x138));
 		}
+
+		// ENDERAL COMPATIBILITY: Hook inventory menu PostDisplay to auto-reset grip mode
+		// This prevents crashes in Enderal's inventory display code
+		REL::Relocation<std::uintptr_t> InventoryMenuVtbl{ RE::VTABLE_InventoryMenu[0] };
+		Hooks::_InventoryMenuOpen = InventoryMenuVtbl.write_vfunc(0x6, Hooks::InventoryMenuOpen::thunk);
+		logs::info("DynamicGrip: Installed Enderal inventory compatibility hook");
 
 	}
 }
