@@ -305,6 +305,18 @@ struct mainFunctions
 	static void UpdateCombat(RE::Character* a_this)
 	{
 		_UpdateCombat(a_this);
+
+		// Only process NPCs, not creatures
+        // Check for ActorTypeNPC keyword (NPCs have this, creatures don't)
+        if (!a_this->HasKeywordString("ActorTypeNPC")) {
+            return;
+        }
+
+        // Double-check: explicitly exclude creatures
+        if (a_this->HasKeywordString("ActorTypeCreature")) {
+            return;
+        }
+
 		auto combatController = a_this->GetActorRuntimeData().combatController;
 		if (combatController)
 		{
